@@ -89,7 +89,7 @@ public class Sidekick implements OpModeManagerNotifier.Notifications {
         int identifier; // Identifier of this serializer; increments on every one, starts from zero
         Sk.Serializer<T> serializer; // Serializer for this type
         Object[] prototypeOutput; // Serialized sample that gives us the output object types
-        String format; // Format describing parameter names and units
+        String format; // Format describing parameter names and units, e.g., "x=in, y=in, heading=rad"
         SerializerInfo(Class<?> klass, int identifier, Sk.Serializer<T> serializer, Object[] prototypeOutput, String format) {
             this.klass = klass;
             this.identifier = identifier;
@@ -129,6 +129,7 @@ public class Sidekick implements OpModeManagerNotifier.Notifications {
     final static long MIN_STORAGE_MBS = 100; // Always keep this many megabytes free in "/sdcard"
     final static String SD_CARD_PATH = Environment.getExternalStorageDirectory().getPath(); // AKA 'sdcard'
     final static String SUBDIRECTORY = SD_CARD_PATH + "/sidekick"; // Subdirectory for all captures
+    final static String TEMP_LOGCAT_FILE = SUBDIRECTORY + "/logcat.temporary";
     final static boolean isPC = !"The Android Project".equals(System.getProperty("java.vm.name"))
             && !Objects.requireNonNull(System.getProperty("java.runtime.name")).contains("Android");
 
@@ -155,6 +156,7 @@ public class Sidekick implements OpModeManagerNotifier.Notifications {
     ReceiveLoopCallbacks receiveLoopCallbacks = new ReceiveLoopCallbacks(); // For Gamepad hooks
     OpModeNotification expectedNotification = OpModeNotification.PRE_INIT; // The expected next OpMode notification
     HashMap<Thread, ThreadRegister> threadRegistry = new HashMap<>(); // Registered threads
+    String captureName = ""; // Name specified by the user for the current capture; includes ".sidekick"
 
     final private NanoWSD server = new NanoWSD(WEB_SOCKET_PORT) {
         @Override protected WebSocket openWebSocket(IHTTPSession handshake) {
@@ -216,12 +218,15 @@ public class Sidekick implements OpModeManagerNotifier.Notifications {
     static boolean setApiRequestedState(ApiRequestedState state) {
         synchronized (sidekickLock) {
             // The API can enable/disable Sidekick only if it hasn't initialized yet:
+            if (isInitialized) {
+                return false;
+            }
             apiRequestedState = state;
-            return !isInitialized;
+            return true;
         }
     }
 
-    /// Record issues that the user would like to suppress.
+    /// API for the user to register issue codes that they'd like to suppress.
     void suppressIssues(int... issueCodes) {
         synchronized(sidekickLock) {
             for (int issueCode: issueCodes) {
@@ -230,12 +235,21 @@ public class Sidekick implements OpModeManagerNotifier.Notifications {
         }
     }
 
-    /// Set the retention period for automatic Sidekick capture data, in days.
+    /// API to set the retention period for automatic Sidekick capture data, in days.
     void setRetentionDays(int days) {
         FileWorker.retentionDays = days;
     }
 
-    /// Register a thread with the thread registry. NOTE: This can't take a thread as an
+    /// Private API to set the capture's file name.
+    void setCaptureName(String name) {
+        // Verify that the name ends in ".sidekick":
+        if (!name.endsWith(".sidekick")) {
+            name += ".sidekick";
+        }
+        captureName = name;
+    }
+
+    /// API to register a thread with the thread registry. NOTE: This can't take a thread as an
     /// argument because we can only query the Linux TID from the current thread.
     void registerThreadStart(String threadName) {
         synchronized(sidekickLock) {
@@ -248,7 +262,7 @@ public class Sidekick implements OpModeManagerNotifier.Notifications {
         }
     }
 
-    /// Unregister a thread from the thread registry.
+    /// API to unregister a thread from the thread registry.
     void registerThreadEnd() {
         synchronized(sidekickLock) {
             Thread thread = Thread.currentThread();

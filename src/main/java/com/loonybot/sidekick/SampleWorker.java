@@ -40,11 +40,19 @@ import java.util.function.Supplier;
 
 /// Descriptor for enumerating supported realtime counter types.
 class RealtimeDescriptor {
-    String name; // Name of the counter
+    String id; // Identifier of the counter
     String description; // Description of the counter
-    public RealtimeDescriptor(String name, String description) {
-        this.name = name;
+    String unit; // Unit (e.g., "C")
+    boolean isInteger; // True if the counter represents an integer
+    float recommended_min; // Recommended minimum value for the graph (both min and max can be zero)
+    float recommended_max; // Recommended maximum value for the graph
+    public RealtimeDescriptor(String id, String description, String unit, boolean isInteger, float min, float max) {
+        this.id = id;
         this.description = description;
+        this.unit = unit;
+        this.isInteger = isInteger;
+        this.recommended_min = min;
+        this.recommended_max = max;
     }
 }
 
@@ -61,18 +69,22 @@ class Realtime {
     }
 
     /// Register a supported realtime counter. Thread safe. Can be called multiple times for
-    /// the same counter.
-    static void register(String counterName, String description) {
+    /// the same counter. The min and max values are optional recommended values and can both
+    /// be zero.
+    static void register(String counterId, String description, String unit, boolean isInteger) {
+        register(counterId, description, unit, isInteger, 0, 0);
+    }
+    static void register(String counterId, String description, String unit, boolean isInteger, float min, float max) {
         synchronized(lock) {
-            supportedCounters.add(new RealtimeDescriptor(counterName, description));
+            supportedCounters.add(new RealtimeDescriptor(counterId, description, unit, isInteger, min, max));
         }
     }
 
     /// Return true if the specified counter is supported.
-    static boolean isRegistered(String counterName) {
+    static boolean isRegistered(String counterId) {
         synchronized(lock) {
             for (RealtimeDescriptor descriptor : supportedCounters) {
-                if (descriptor.name.equals(counterName)) {
+                if (descriptor.id.equals(counterId)) {
                     return true;
                 }
             }
@@ -81,17 +93,15 @@ class Realtime {
     }
 
     /// Update the list of realtime counters subscribed by the specified socket.
-    static void updateSubscription(Socket socket, String[] counterNames) {
+    static void updateSubscription(Socket socket, String[] counterIds) {
         synchronized (lock) {
             // Add or remove this socket from the realtime subscriber list, as necessary:
-            Sidekick.logI("starting updateSubscription"); // @@@
-            if (counterNames.length == 0) {
+            if (counterIds.length == 0) {
                 subscriptions.remove(socket);
             } else {
-                subscriptions.put(socket, new HashSet<>(Arrays.asList(counterNames)));
+                subscriptions.put(socket, new HashSet<>(Arrays.asList(counterIds)));
             }
 
-            Sidekick.logI("more updateSubscription"); // @@@
             // Update the aggregated list of all realtime counters subscribed by all sockets:
             Set<String> allSocketCounters = new HashSet<>();
             for (Set<String> counters: subscriptions.values()) {
@@ -111,12 +121,11 @@ class Realtime {
                     counterValues.remove(counter);
                 }
             }
-            Sidekick.logI("finished updateSubscription");
         }
     }
 
     /// Return the list of realtime counters subscribed by all sockets. Thread safe.
-    static Set<String> getSubscribedNames() {
+    static Set<String> getSubscribedIds() {
         synchronized (lock) {
             // Make a copy of the values for thread safety:
             return new HashSet<>(counterValues.keySet());
@@ -185,11 +194,11 @@ class CpuSampler {
     boolean first = true; // True if the very first sample
 
     CpuSampler() {
-        Realtime.register("system_load", "System load (%)");
-        Realtime.register("online_count", "Count of cores online");
-        Realtime.register("governor", "CPU governor");
-        Realtime.register("frequency", "CPU frequency (MHz)");
-        Realtime.register("temperature", "CPU temperature (C)");
+        Realtime.register("system_load", "CPU utilization (all cores)", "%", true, 0, 100);
+        Realtime.register("online_count", "Count of cores online", "", true, 0, 4);
+        Realtime.register("governor", "CPU governor mode", "", true);
+        Realtime.register("frequency", "CPU frequency", "MHz", true, 400, 1600);
+        Realtime.register("temperature", "CPU temperature", "C", true, 0, 80);
     }
 
     /// Record of the data.
@@ -363,10 +372,10 @@ class BandwidthSampler {
     long previousTxBytes = -1;
 
     BandwidthSampler() {
-        Realtime.register("storage_reads", "Storage reads (MB/s)");
-        Realtime.register("storage_writes", "Storage writes (MB/s)");
-        Realtime.register("wifi_reads", "Wi-Fi reads (MB/s)");
-        Realtime.register("wifi_writes", "Wi-Fi writes (MB/s)");
+        Realtime.register("storage_reads", "Storage reads", "MB/s", false);
+        Realtime.register("storage_writes", "Storage writes", "MB/s", false);
+        Realtime.register("wifi_reads", "Wi-Fi reads", "MB/s", false);
+        Realtime.register("wifi_writes", "Wi-Fi writes", "MB/s", false);
     }
 
     /// Record of the data.
@@ -436,9 +445,9 @@ class BandwidthSampler {
 /// Sampler for memory and thread count metrics.
 class MemoryAndThreadCountSampler {
     MemoryAndThreadCountSampler() {
-        Realtime.register("vm_rss", "Vm Resident Set Size (GB)");
-        Realtime.register("mem_available", "Memory available (GB)");
-        Realtime.register("thread_count", "Thread count");
+        Realtime.register("vm_rss", "Vm Resident Set Size", "GB", false);
+        Realtime.register("mem_available", "Memory available", "GB", false);
+        Realtime.register("thread_count", "Thread count", "", true);
     }
 
     /// Record of the data.
@@ -625,10 +634,10 @@ class InjectedSampler {
 
     /// Class to track active counters.
     static class Counter {
-        String name; // Counter name
+        String id; // Counter ID
         Supplier<Double> supplier; // Supplier of counter value
-        Counter(String name, Supplier<Double> supplier) {
-            this.name = name;
+        Counter(String id, Supplier<Double> supplier) {
+            this.id = id;
             this.supplier = supplier;
         }
     }
@@ -642,10 +651,10 @@ class InjectedSampler {
         // Wrap the counter index and check for a new active counter:
         if (counterIndex >= activeCounters.size()) {
             counterIndex = 0;
-            Set<String> activeCounterNames = Realtime.getSubscribedNames();
+            Set<String> activeCounterIds = Realtime.getSubscribedIds();
             activeCounters.clear();
             for (Counter counter: potentialCounters) {
-                if (activeCounterNames.contains(counter.name)) {
+                if (activeCounterIds.contains(counter.id)) {
                     activeCounters.add(counter);
                 }
             }
@@ -655,7 +664,7 @@ class InjectedSampler {
             // Sample the counter and advance for the next call. Note that there's no need
             // to mark the device calls as 'bonus' - the app recognizes this worker thread.
             Counter counter = activeCounters.get(counterIndex);
-            Realtime.post(counter.name, counter.supplier.get());
+            Realtime.post(counter.id, counter.supplier.get());
             counterIndex++;
         }
     }
@@ -669,7 +678,7 @@ class InjectedSampler {
     }
     <T extends HardwareDevice> List<Device<T>> getDevices(HardwareMap hardwareMap, Class<? extends T> klass) {
         List<Device<T>> list = new LinkedList<>();
-        Set<String> names = hardwareMap.getAllNames(LynxModule.class);
+        Set<String> names = hardwareMap.getAllNames(klass);
         for (String name: names) {
             T device = Capture.unwrap(hardwareMap).tryGet(klass, name); // Use original to avoid recording tryGet()
             if (device != null) {
@@ -694,33 +703,33 @@ class InjectedSampler {
         for (Device<DcMotorEx> motor: getDevices(hardwareMap, DcMotorEx.class)) {
             name = "motor." + motor.name + ".getCurrent";
             potentialCounters.add(new Counter(name, () -> motor.device.getCurrent(CurrentUnit.AMPS)));
-            Realtime.register(name, motor.name + " current (A)");
+            Realtime.register(name, "DcMotorEx " + motor.name + " current", "A", false);
         }
 
         for (Device<LynxModule> module: getDevices(hardwareMap, LynxModule.class)) {
             name = "module." + module.name + ".getCurrent";
             potentialCounters.add(new Counter(name, () -> module.device.getCurrent(CurrentUnit.AMPS)));
-            Realtime.register(name, module.name + "current (A)");
+            Realtime.register(name, module.name + " current", "A", false);
 
             name = "module." + module.name + ".getGpioBusCurrent";
             potentialCounters.add(new Counter(name, () -> module.device.getGpioBusCurrent(CurrentUnit.AMPS)));
-            Realtime.register(name, module.name + "%s GPIO bus current (A)");
+            Realtime.register(name, module.name + " GPIO bus current", "A", false);
 
             name = "module." + module.name + ".getI2cBusCurrent";
             potentialCounters.add(new Counter(name, () -> module.device.getI2cBusCurrent(CurrentUnit.AMPS)));
-            Realtime.register(name, module.name + "%s I2C bus current (A)");
+            Realtime.register(name, module.name + " I2C bus current", "A", false);
 
             name = "module." + module.name + ".getInputVoltage";
             potentialCounters.add(new Counter(name, () -> module.device.getInputVoltage(VoltageUnit.VOLTS)));
-            Realtime.register(name, module.name + "%s input voltage (V)");
+            Realtime.register(name, module.name + " battery voltage", "V", false);
 
             name = "module." + module.name + ".getAuxiliaryVoltage";
             potentialCounters.add(new Counter(name, () -> module.device.getAuxiliaryVoltage(VoltageUnit.VOLTS)));
-            Realtime.register(name, module.name + "%s auxiliary (5V) voltage (V)");
+            Realtime.register(name, module.name + " auxiliary (5V) voltage", "V", false);
 
             name = "module." + module.name + ".getTemperature";
             potentialCounters.add(new Counter(name, () -> module.device.getTemperature(TempUnit.CELSIUS)));
-            Realtime.register(name, module.name + "%s temperature (C)");
+            Realtime.register(name, module.name + " temperature", "C", false);
         }
 
         for (Device<Limelight3A> limelight: getDevices(hardwareMap, Limelight3A.class)) {
@@ -728,24 +737,24 @@ class InjectedSampler {
             // their queries into a single getStatus() call.
             name = "limelight." + limelight.name + ".getTemp";
             potentialCounters.add(new Counter(name, () -> limelight.device.getStatus().getTemp()));
-            Realtime.register(name, limelight.name + "temperature (C)");
+            Realtime.register(name, "Limelight temperature", "C", false);
 
             name = "limelight." + limelight.name + ".getFps";
             potentialCounters.add(new Counter(name, () -> limelight.device.getStatus().getFps()));
-            Realtime.register(name, limelight.name + "processing FPS");
+            Realtime.register(name, "Limelight FPS", "", false);
 
             name = "limelight." + limelight.name + ".getCpu";
             potentialCounters.add(new Counter(name, () -> limelight.device.getStatus().getCpu()));
-            Realtime.register(name, limelight.name + "CPU utilization (%)");
+            Realtime.register(name, "Limelight CPU utilization", "%", true);
         }
 
         for (Device<AnalogInput> analogInput: getDevices(hardwareMap, AnalogInput.class)) {
-            if (!analogInput.name.equals(FLOODGATE_SENSOR)) {
+            if (analogInput.name.equals(FLOODGATE_SENSOR)) {
                 name = "analogInput." + analogInput.name + ".getVoltage";
                 // 3.3V on the sensor maps to 80A on V2 (we don't bother with V1's 60A because
                 // that has been recalled):
                 potentialCounters.add(new Counter(name, () -> analogInput.device.getVoltage() / 3.3 * 80.0));
-                Realtime.register(name, "Robot current (from Floodgate) (A)");
+                Realtime.register(name, "Floodgate total robot current", "A", false);
             }
         }
     }
@@ -842,7 +851,6 @@ class SampleWorker {
     SidekickSampler sidekickSampler = new SidekickSampler(); // Sidekick stats
     InjectedSampler injectedSampler = new InjectedSampler(); // Counters
 
-    // @@@ Should all the periods start off staggered?
     PeriodTracker systemSamplePeriod = new PeriodTracker(250); // Sample system counters every quarter second
     PeriodTracker dashboardSamplePeriod = new PeriodTracker(50); // Sample FTC Dashboard updates every 50ms
     PeriodTracker injectedSamplePeriod = new PeriodTracker(50); // Inject a counter every 50ms

@@ -4,6 +4,7 @@
 package com.loonybot.sidekick;
 
 import static com.loonybot.sidekick.Sidekick.MIN_STORAGE_MBS;
+import static com.loonybot.sidekick.Sidekick.TEMP_LOGCAT_FILE;
 import static java.lang.System.nanoTime;
 
 import android.os.StatFs;
@@ -26,6 +27,7 @@ import com.qualcomm.hardware.lynx.commands.core.LynxGetBulkInputDataResponse;
 import com.qualcomm.hardware.sparkfun.SparkFunOTOS;
 import com.qualcomm.robotcore.eventloop.EventLoopManager;
 import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
+import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.eventloop.opmode.OpModeManagerImpl;
 import com.qualcomm.robotcore.eventloop.opmode.OpModeManagerNotifier;
@@ -64,6 +66,7 @@ import org.firstinspires.ftc.robotcore.external.hardware.camera.CameraName;
 import org.firstinspires.ftc.robotcore.external.hardware.camera.WebcamName;
 import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
 import org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit;
+import org.firstinspires.ftc.robotcore.external.navigation.Pose2D;
 import org.firstinspires.ftc.robotcore.external.navigation.UnnormalizedAngleUnit;
 import org.firstinspires.ftc.robotcore.internal.opmode.TelemetryImpl;
 import org.firstinspires.ftc.robotcore.internal.opmode.TelemetryInternal;
@@ -73,6 +76,7 @@ import org.firstinspires.inspection.InspectionState;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.PrintWriter;
 import java.io.RandomAccessFile;
 import java.io.StringWriter;
@@ -111,11 +115,11 @@ import java.util.function.Consumer;
 class Section {
     // Constants describing the various sections. They won't be recorded in this order,
     // but *will* be uploaded in this order.
-    static final byte METADATA           =  0; // String tokens, record descriptors, manifest
+    static final byte METADATA           =  0; // String tokens, dynamic descriptors, manifest, etc.
     static final byte PII                =  1; // Privacy-sensitive data, if any
     static final byte ARCHIVE            =  2; // Archive records, usually the biggest section
     static final byte LOGCAT             =  3; // Logcat section, if any
-    static final byte RESERVED4          =  4;
+    static final byte LIMELIGHT_VIDEO    =  4; // Used only PC-side
     static final byte RESERVED3          =  5;
     static final byte RESERVED2          =  6;
     static final byte RESERVED1          =  7;
@@ -195,13 +199,13 @@ class Header {
 /// Signatures demarcate various parts of the file for additional file integrity validation.
 /// Their values are chosen randomly.
 class Signature {
-    static final int FILE_HEADER            = 0x0BAD6005; // "BadGoos" signature
-    static final int ARCHIVE_DATA           = 0xA3F7C2D8;
+    static final int FILE_HEADER            = 0x0BAD6005; // "BadGoos"
+    static final int ARCHIVE_RECORDS        = 0xA3F7C2D8;
     static final int LOGCAT                 = 0x2E9F3D7A;
     static final int MANIFEST               = 0x7A3D9F2E;
     static final int PII                    = 0xEF82B9F3;
     static final int STRING_TOKENS          = 0xF7A9B2E1;
-    static final int RECORD_DESCRIPTORS     = 0x5E4F3A9B;
+    static final int DYNAMIC_DESCRIPTORS    = 0x5E4F3A9B;
     static final int DEVICE_DESCRIPTORS     = 0x9B3A4F5E;
     static final int THREAD_DESCRIPTORS     = 0x1A2B3C4D;
     static final int SERIALIZER_DESCRIPTORS = 0x4D3C2B1A;
@@ -235,56 +239,56 @@ class RecordId {
     static final int END_BONUS                             = 4;
 
     // All other records have timestamps:
-    static final int TELEMETRY_SET_CAPTION                 = 8; /// AKA [RecordId#FIRST_TIMESTAMP] and [RecordId#TELEMETRY_AND_LOG_MIN]
-    static final int TELEMETRY_SET_RETAINED                = 9;
-    static final int TELEMETRY_REMOVE_ITEM                 = 10;
-    static final int TELEMETRY_CLEAR                       = 11;
-    static final int TELEMETRY_CLEAR_ALL                   = 12;
-    static final int TELEMETRY_SPEAK                       = 13;
-    static final int TELEMETRY_UPDATE                      = 14;
-    static final int TELEMETRY_ADD_LINE                    = 15;
-    static final int TELEMETRY_REMOVE_LINE                 = 16;
-    static final int TELEMETRY_SET_AUTO_CLEAR              = 17;
-    static final int TELEMETRY_SET_ITEM_SEPARATOR          = 18;
-    static final int TELEMETRY_SET_CAPTION_VALUE_SEPARATOR = 19;
-    static final int TELEMETRY_SET_DISPLAY_FORMAT          = 20;
-    static final int TELEMETRY_SET_MS_TRANSMISSION_INTERVAL= 21;
-    static final int LOG_SET_CAPACITY                      = 22;
-    static final int LOG_SET_DISPLAY_ORDER                 = 23;
-    static final int LOG_ADD_STRING                        = 24;
-    static final int LOG_CLEAR                             = 25; /// AKA [RecordId#TELEMETRY_AND_LOG_MAX]
-
-    static final int END_ARCHIVE                           = 26;
-    static final int GAMEPAD1_DATA                         = 27;
-    static final int GAMEPAD2_DATA                         = 28;
-    static final int PAINT                                 = 29; /// [Paint] record
-    static final int NOTE_STRING                           = 30; /// [Capture#note] called with a null value
-    static final int LOOP                                  = 31;
-    static final int SYSTEM_SAMPLES                        = 32;
-    static final int MODULE0_BULK_DATA                     = 33;
-    static final int MODULE1_BULK_DATA                     = 34;
-    static final int MODULE2_BULK_DATA                     = 35;
-    static final int MODULE3_BULK_DATA                     = 36;
-    static final int PINPOINT_BULK_DATA                    = 37;
-    static final int UNHANDLED_EXCEPTION                   = 38;
-    static final int GLOBAL_MESSAGE                        = 39;
+    static final int END_ARCHIVE                           = 10;
+    static final int TELEMETRY_SET_CAPTION                 = 11;
+    static final int TELEMETRY_SET_RETAINED                = 12;
+    static final int TELEMETRY_REMOVE_ITEM                 = 13;
+    static final int TELEMETRY_CLEAR                       = 14;
+    static final int TELEMETRY_CLEAR_ALL                   = 15;
+    static final int TELEMETRY_SPEAK                       = 16;
+    static final int TELEMETRY_UPDATE                      = 17;
+    static final int TELEMETRY_ADD_LINE                    = 18;
+    static final int TELEMETRY_REMOVE_LINE                 = 19;
+    static final int TELEMETRY_SET_AUTO_CLEAR              = 20;
+    static final int TELEMETRY_SET_ITEM_SEPARATOR          = 21;
+    static final int TELEMETRY_SET_CAPTION_VALUE_SEPARATOR = 22;
+    static final int TELEMETRY_SET_DISPLAY_FORMAT          = 23;
+    static final int TELEMETRY_SET_MS_TRANSMISSION_INTERVAL= 24;
+    static final int LOG_SET_CAPACITY                      = 25;
+    static final int LOG_SET_DISPLAY_ORDER                 = 26;
+    static final int LOG_ADD_STRING                        = 27;
+    static final int LOG_CLEAR                             = 28;
+    static final int GAMEPAD1_DATA                         = 29;
+    static final int GAMEPAD2_DATA                         = 30;
+    static final int PAINT                                 = 31;
+    static final int NOTE_STRING                           = 32;
+    static final int LOOP                                  = 33;
+    static final int SYSTEM_SAMPLES                        = 34;
+    static final int MODULE0_BULK_DATA                     = 35;
+    static final int MODULE1_BULK_DATA                     = 36;
+    static final int MODULE2_BULK_DATA                     = 37;
+    static final int MODULE3_BULK_DATA                     = 38;
+    static final int PINPOINT_BULK_DATA                    = 39;
+    static final int UNHANDLED_EXCEPTION                   = 40;
+    static final int GLOBAL_MESSAGE                        = 41;
+    static final int CREATE_STOPWATCH                      = 42;
+    static final int STOPWATCH_START                       = 43;
+    static final int STOPWATCH_STOP                        = 44;
+    static final int POSE                                  = 45;
 
     // Meta data:
-    static final int FIRST_TIMESTAMP = TELEMETRY_SET_CAPTION; // Records with timestamps start at this count
-    static final int TELEMETRY_AND_LOG_MIN = TELEMETRY_SET_CAPTION;
-    static final int TELEMETRY_AND_LOG_MAX = LOG_CLEAR;
-    static final int FIRST_ALLOCATABLE = 100; // First allocatable
-    static final int LAST_ALLOCATABLE = 0xffff; // Max unsigned short
+    static final int FIRST_DYNAMIC = 100; // First dynamic record ID
+    static final int LAST_DYNAMIC = 0xffff; // Max unsigned short
 }
 
-/// Identifier of the varargs record type. These are added to [Capture.RecordDescriptor#recordId].
+/// Identifier of the varargs record type. These are added to [Capture.DynamicDescriptor#recordId].
 class VarargsType {
     static final byte NOTE = 0; /// [Sk#note]
     static final byte ALERT = 1; /// [Sk#alert]
     static final byte REQUIRE = 2; /// [Sk#require]
-    static final byte TELEMETRY_ADD_DATA = 3; /// [Telemetry#addData]
-    static final byte TELEMETRY_SET_VALUE = 4; /// [Telemetry.Item#setValue]
-    static final byte LOG_ADD = 5; /// [Telemetry.Log#add]
+    static final byte LOG_ADD = 3; /// [Telemetry.Log#add]
+    static final byte TELEMETRY_ADD_DATA = 4; /// [Telemetry#addData]
+    static final byte TELEMETRY_SET_VALUE = 5; /// [Telemetry.Item#setValue]
     // --------------------------
     static final byte COUNT = 6;
 }
@@ -322,6 +326,7 @@ enum MinorError {
 
 /// Major errors are so severe they prevent captures from loading.
 enum MajorError {
+    // @@@ Nuke
     INTERRUPTED_CAPTURE,            // 0x1: Capture was interrupted; only Logcat is available
     DEVICE_ID_OVERFLOW,             // 0x2: Error getting device ID
     RECORD_FORMAT_TOO_LONG,         // 0x4: Error getting record format
@@ -353,6 +358,7 @@ class ManifestJson {
     public int availableProcessors = Runtime.getRuntime().availableProcessors(); // Count of CPU cores
 
     public boolean isBlocksOpMode = false; // True if recorded from BlocksOpMode
+    public boolean isLinearOpMode = false; // True if LinearOpMode was used
     public int[] suppressedIssues = new int[0]; // Array of issue codes to disable
     public int[] lynxAddresses; // Lynx port addresses, indexed by LynxModuleInfo.id
     public int pinpointDeviceVersion = 0; // GoBilda Pinpoint device version; 0 if not present
@@ -377,7 +383,7 @@ class ThreadDescriptor {
     int descriptorIndex; // Index into threadDescriptorList
     String name; // Thread name
     int priority; // Java thread priority
-    int tid; // Linux TID
+    int tid; // Linux TID, 0 if unknown
     boolean isNew; // True if the thread was created after the opMode started
     int jiffyStart; // Jiffy count at the start of the capture; -1 if unknown
     int jiffyDuration; // Jiffies consumed during the capture; -1 if unknown (e.g., we don't have the TID)
@@ -434,10 +440,10 @@ class DeviceChild {
 /// Principal class responsible for creating the capture.
 @SuppressWarnings({"unchecked", "rawtypes", "ReassignedVariable", "ResultOfMethodCallIgnored"}) // Can add "unused"
 class Capture {
-    /// Descriptor for device API records and varargs records like [Sk#note]. This is not a static
-    /// class as it needs to refer to the Capture object for the likes of [Capture#putFloatObject]
-    /// et al.
-    class RecordDescriptor {
+    /// Descriptor for dynamic device API records and varargs records like [Sk#note]. This is not
+    /// a static class as it needs to refer to the Capture object for the likes of
+    /// [Capture#putFloatObject] et al.
+    class DynamicDescriptor {
         String methodName; // Name of the method, empty for data record descriptors
         int deviceId; /// IDs the associated device, index into index into [Capture#deviceClassArray], not used for data record descriptors
         int childId; // If non-zero, this is a child class of the associated type
@@ -453,14 +459,14 @@ class Capture {
         byte[] formatBuffer; /// Array of [ParamType]; the formats of the arguments (and return value, if present)
         int formatIndex; /// Current parsing index into [formatBuffer]
 
-        /// RecordDescriptor constructor for varargs calls such as [Sk#note], [Telemetry#addLine], etc.
-        RecordDescriptor(SchemaKey schemaKey, int argCount) {
+        /// Constructor for varargs calls such as [Sk#note], [Telemetry#addLine], etc.
+        DynamicDescriptor(SchemaKey schemaKey, int argCount) {
             methodName = ""; // Not used for varargs records; this indicates the record's type
             maxInstances = VarargsType.COUNT; // Reserve a slot for each possible type of varargs record
 
-            recordId = nextRecordId;
-            nextRecordId += maxInstances;
-            if (recordId > (RecordId.LAST_ALLOCATABLE + 1)) {
+            recordId = nextDynamicId;
+            nextDynamicId += maxInstances;
+            if (recordId > (RecordId.LAST_DYNAMIC + 1)) {
                 error(MajorError.DEVICE_ID_OVERFLOW);
             }
 
@@ -478,14 +484,14 @@ class Capture {
             allocatedDescriptors.add(this);
         }
 
-        /// RecordDescriptor constructor for hand-coded wrappers.
-        RecordDescriptor(DeviceInfo deviceInfo, String method, SchemaKey schemaKey) {
+        /// Constructor for hand-coded wrappers.
+        DynamicDescriptor(DeviceInfo deviceInfo, String method, SchemaKey schemaKey) {
             deviceId = deviceInfo.deviceId;
             maxInstances = deviceInfo.maxInstances;
             methodName = method;
-            recordId = nextRecordId;
-            nextRecordId += deviceInfo.maxInstances;
-            if (recordId > (RecordId.LAST_ALLOCATABLE + 1)) {
+            recordId = nextDynamicId;
+            nextDynamicId += deviceInfo.maxInstances;
+            if (recordId > (RecordId.LAST_DYNAMIC + 1)) {
                 error(MajorError.DEVICE_ID_OVERFLOW);
             }
             formatBuffer = schemaKey.format;
@@ -493,32 +499,32 @@ class Capture {
             // No need to generate putters or cache the descriptor as the caller will handle that.
         }
 
-        /// RecordDescriptor constructor for device calls wrapped via Byte Buddy.
-        RecordDescriptor(Interceptor.Context context, Interceptor.MethodKey methodKey) {
+        /// Constructor for device calls wrapped via Byte Buddy.
+        DynamicDescriptor(Interceptor.Context context, Interceptor.MethodKey methodKey) {
             DeviceInfo deviceInfo = context.deviceInfo;
             deviceId = deviceInfo.deviceId;
             maxInstances = deviceInfo.maxInstances;
             childId = context.childId;
             methodName = methodKey.method.getName();
-            recordId = nextRecordId;
-            nextRecordId += deviceInfo.maxInstances;
-            if (recordId > (RecordId.LAST_ALLOCATABLE + 1)) {
+            recordId = nextDynamicId;
+            nextDynamicId += deviceInfo.maxInstances;
+            if (recordId > (RecordId.LAST_DYNAMIC + 1)) {
                 error(MajorError.DEVICE_ID_OVERFLOW);
             }
 
             // Combine the argument and return types into a single array of parameter types:
-            Class[] argumentTypes = methodKey.method.getParameterTypes();
-            int argCount = argumentTypes.length;
-            Class[] allParameters = Arrays.copyOf(argumentTypes, argCount + 1);
-            allParameters[argCount] = methodKey.method.getReturnType();
+            Class[] parameterTypes = methodKey.method.getParameterTypes();
+            int parameterCount = parameterTypes.length;
+            Class[] allParameters = Arrays.copyOf(parameterTypes, parameterCount + 1);
+            allParameters[parameterCount] = methodKey.method.getReturnType();
 
             // Encode a representation of all of the argument types:
             SchemaKey argsKey = getSchemaKey(allParameters, true, 0);
             formatBuffer = argsKey.format;
 
             // Create a 'putter' for every argument plus the return value from the 'formatBuffer':
-            paramPutters = new Consumer[argCount];
-            for (int i = 0; i < argCount; i++) {
+            paramPutters = new Consumer[parameterCount];
+            for (int i = 0; i < parameterCount; i++) {
                 paramPutters[i] = nextParamPutter(); // Updates recordLength and formatIndex
             }
             resultPutter = nextParamPutter();
@@ -534,7 +540,7 @@ class Capture {
                     pinpointSetBulkReadScope = true;
                 }
                 if (methodName.equals("update")) {
-                    if (argCount == 0) {
+                    if (parameterCount == 0) {
                         /// [GoBildaPinpointDriver#update()] case:
                         interceptorFlags |= Interceptor.Flags.PINPOINT_BULK_READ;
                     } else {
@@ -614,7 +620,7 @@ class Capture {
         /// that it comes bundled with additional state to handle the complexity of serializing an
         /// array.
         class ArrayPutter {
-            static final int MAX_ARRAY_SIZE = 250; // Count fits in an unsigned byte
+            static final int MAX_ARRAY_SIZE = 250; // The count fits into an unsigned byte
 
             Consumer paramPutter; // 'putter' for the type of the array's elements
             int argSize; // The byte size of an element of the array
@@ -680,7 +686,7 @@ class Capture {
             }
         }
 
-        /// Adds to [RecordDescriptor#recordLength] on every invocation.
+        /// Adds to [DynamicDescriptor#recordLength] on every invocation.
         Consumer nextParamPutter() {
             switch (formatBuffer[formatIndex++]) {
                 case ParamType.INTEGER: recordLength += 4; return Capture.this::putIntegerObject;
@@ -696,12 +702,12 @@ class Capture {
                     Consumer paramPutter = nextParamPutter(); // Increments recordLength
                     int argLength = recordLength - arrayStartLength;
                     recordLength = arrayStartLength;
-                    return new RecordDescriptor.ArrayPutter(paramPutter, argLength)::putArray;
+                    return new DynamicDescriptor.ArrayPutter(paramPutter, argLength)::putArray;
                 case ParamType.BEGIN_OBJECT:
                     int serializerIndex = formatBuffer[formatIndex++];
                     Sidekick.SerializerInfo serializerInfo = sidekick.serializersList.get(serializerIndex);
                     assert (serializerInfo != null);
-                    RecordDescriptor.ObjectPutter objectPutter = new RecordDescriptor.ObjectPutter(serializerInfo);
+                    DynamicDescriptor.ObjectPutter objectPutter = new DynamicDescriptor.ObjectPutter(serializerInfo);
                     recordLength++; // Reserve the null-object indicator byte
                     assert(formatBuffer[formatIndex] == ParamType.END_OBJECT);
                     formatIndex++;
@@ -732,7 +738,8 @@ class Capture {
     final static int TICK_MASK = 0xffffff; // Mask to extract time ticks from nanoTime() after shift
     final static byte NULL_TERMINATOR = 0; // We null-terminate all strings in the archive
     final static byte NULL_STRING_MARKER = (byte) 0x80; // Byte encoding to represent null strings
-    final static int DEFAULT_MAX_STRING_BYTES = 512; // Strings are truncated to this length, in bytes
+    final static int DEFAULT_MAX_STRING_BYTES = 512; // Standard strings are truncated to this length, in bytes
+    final static int MAX_STRING_BYTES = 16*1024; // Some strings can be as long as this, in bytes
     final static int STRING_TOKEN_LAST_ALLOCATABLE_ID = Short.MAX_VALUE; // Max string token ID
     final static int BULK_DATA_BYTE_COUNT = 34; // The system's bulk data payload is 34 bytes
     final static int MAX_LYNX_COUNT = 4; // Maximum number of Lynx modules for bulk reads
@@ -761,7 +768,7 @@ class Capture {
     PiiJson pii = new PiiJson(); // Privacy-sensitive data saved with capture
     int minorErrors; /// Bitmask of [MinorError] capture issues seen that are non-fatal
     int majorErrors; /// Bitmask of [MajorError] capture issues seen that are fatal for the capture
-    int nextRecordId = RecordId.FIRST_ALLOCATABLE; // ID of next record descriptor to be created
+    int nextDynamicId = RecordId.FIRST_DYNAMIC; // ID of next dynamic record descriptor to be created
     int nextStringId = 1; // ID of next string token to be created; zero is reserved
     Sidekick sidekick; // Reference to the corresponding Sidekick object
     OpMode opMode; // Reference to the currently active opMode
@@ -778,18 +785,17 @@ class Capture {
     long endNanoTime; // Capture end time, in nanoseconds
     String dateAndTime; // Date and time at which the OpMode was initialized, used for file names
     Section[] sections; // Data on all capture sections
-    String logcatFilename; // Name of the logcat file
-    Process logcatProcess; // Process that records Logcat data during the capture
+    String lastLogcatTime; // Time that the last logcat was saved (null if none saved yet)
     int opModeTid; // Linux TID of the OpMode thread; zero if not yet known
     long currentThreadId; /// Java ID of most recent thread to write to the archive (not the
         /// Linux TID!). Zero is a reserved value that causes [#threadSwitchAndBookkeeping] to be
         /// called before the next record.
     boolean[] gamepadIsPs4 = new boolean[2]; // False if gamepad is Xbox-compatible, true if PS4
     ArrayList<DeviceInfo> deviceClassArray = new ArrayList<>(); /// List of all device classes, index by [DeviceInfo#deviceId]
-    HashMap<Interceptor.MethodKey, RecordDescriptor> methodDescriptors = new HashMap<>(); // Descriptor map for methods
-    Map<SchemaKey, RecordDescriptor> varargsDescriptors = new HashMap<>(); // Descriptor map for varargs
-    HashMap<String, RecordDescriptor> hardwareMapDescriptors = new HashMap<>(); /// For [#recordHardwareMapGet]
-    LinkedList<RecordDescriptor> allocatedDescriptors = new LinkedList<>(); // List of all descriptors
+    HashMap<Interceptor.MethodKey, DynamicDescriptor> methodDescriptors = new HashMap<>(); // Descriptor map for methods
+    Map<SchemaKey, DynamicDescriptor> varargsDescriptors = new HashMap<>(); // Descriptor map for varargs
+    HashMap<String, DynamicDescriptor> hardwareMapDescriptors = new HashMap<>(); /// For [#recordHardwareMapGet]
+    LinkedList<DynamicDescriptor> allocatedDescriptors = new LinkedList<>(); // List of all descriptors
     HashMap<Thread, ThreadDescriptor> threadDescriptorMap = new HashMap<>(); // Map thread to descriptor
     LinkedList<ThreadDescriptor> threadDescriptorList = new LinkedList<>(); // List of all descriptors, zero is reserved
     HashMap<LynxModule, LynxModuleInfo> lynxModuleMap = new HashMap<>(); // Not all Lynx modules may be present
@@ -809,6 +815,7 @@ class Capture {
     boolean usingCamera = false; // True if using webcam or built-in camera (not a Limelight)
     String limelightAddress; // IP address of a Limelight camera found during Init, null if none
     LimelightVideo limelightCapture; // Video capture for the Limelight camera, null if not started
+    int nextStopwatchId; // ID of the next stopwatch object to be created
 
     /// Generate a unique ID for a record. Guaranteed to be non-zero even if truncated to 16 bits.
     int generateUniqueness() {
@@ -1027,12 +1034,11 @@ class Capture {
     /// and `argsAreClasses` will be false. When encoding methods, the args array will be the
     /// [Method#getParameterTypes] array of Class<?> for each argument of the method, and
     /// `argsAreClasses` will be true.
-    @NonNull
-    SchemaKey getSchemaKey(Object[] args, boolean argsAreClasses, int recursionLevel) {
+    @NonNull SchemaKey getSchemaKey(Object[] args, boolean argsAreClasses, int recursionLevel) {
         int argCount = args.length;
         byte[] resultBuffer = new byte[argCount]; // Size array assuming no objects, for now
         int resultIndex = 0;
-        for (Object arg: args) {
+        for (Object arg : args) {
             SchemaKey schemaKey;
             if (arg == null) {
                 schemaKey = new SchemaKey(new byte[]{ParamType.VOID});
@@ -1074,11 +1080,6 @@ class Capture {
 
                     // Cache the result in the map for next time:
                     classParamTypes.put(klass, schemaKey);
-                }
-                // If it's an object, make sure the added argument count doesn't exceed the maximum:
-                if (schemaKey.format.length > 4) {
-                    // 3 for begin/id/end bytes, and 1 argument in the object is already accounted for:
-                    argCount += schemaKey.format.length - 4; // @@@ Gotta actually use argCount and check max length - or delete it
                 }
             }
             // Special case the typical, simple case:
@@ -1421,21 +1422,22 @@ class Capture {
     /// reconstructed in the pattern of: hardwareMap.tryGet(DcMotor.class, "frontLeftMotor")
     void recordHardwareMapGet(String methodName, long nanoStartTime, Class<?> classOrInterface, String deviceName) {
         synchronized (sidekickLock) {
-            RecordDescriptor recordDescriptor = hardwareMapDescriptors.get(methodName);
-            if (recordDescriptor == null) {
+            DynamicDescriptor dynamicDescriptor = hardwareMapDescriptors.get(methodName);
+            if (dynamicDescriptor == null) {
                 // We are recording a HardwareMap method so that's the type we specify here:
                 DeviceInfo deviceInfo = hardwareMap.getDeviceInfo(HardwareMap.class);
                 if (deviceInfo.deviceNames.isEmpty()) {
                     deviceInfo.deviceNames.add("HardwareMap");
                     // Nothing added to 'proxyInstance' because HardwareMap.get() will never be called
                 }
-                // Returns void:
+                // The 1st argument is a string that won't be shown with quotes, the 2nd argument
+                // is a strong to be shown with quotes, and the return type is 'void':
                 SchemaKey schemaKey = new SchemaKey(new byte[]{ParamType.STRING_NO_QUOTES, ParamType.STRING, ParamType.VOID});
-                recordDescriptor = new RecordDescriptor(deviceInfo, methodName, schemaKey);
-                hardwareMapDescriptors.put(methodName, recordDescriptor);
+                dynamicDescriptor = new DynamicDescriptor(deviceInfo, methodName, schemaKey);
+                hardwareMapDescriptors.put(methodName, dynamicDescriptor);
             }
             // There's only one HardwareMap so we don't need to specify an instance:
-            if (beginRecord(recordDescriptor.recordId, 3, nanoStartTime)) {
+            if (beginRecord(dynamicDescriptor.recordId, 3, nanoStartTime)) {
                 putInt24((int) ((nanoTime() - nanoStartTime) >> TICK_SHIFT));
                 putString(classOrInterface.getSimpleName() + ".class");
                 putString(deviceName);
@@ -1455,15 +1457,15 @@ class Capture {
         SkVoltageSensor(SkHardwareMap hardwareMap, VoltageSensor originalSensor, String sensorName) {
             this.originalSensor = originalSensor;
 
-            /// Do work to register the [RecordDescriptor] and allow [SkHardwareMap#wrapDevice] to
+            /// Do work to register the [DynamicDescriptor] and allow [SkHardwareMap#wrapDevice] to
             /// return this device:
             DeviceInfo deviceInfo = hardwareMap.getDeviceInfo(originalSensor.getClass());
             int instance = deviceInfo.deviceNames.size();
             deviceInfo.deviceNames.add(sensorName);
             deviceInfo.proxyInstances.add(this); // Allow HardwareMap.get() to be called
             SchemaKey schemaKey = new SchemaKey(new byte[]{ParamType.FLOAT});
-            RecordDescriptor recordDescriptor = new RecordDescriptor(deviceInfo, "getVoltage", schemaKey);
-            recordId = recordDescriptor.recordId + instance;
+            DynamicDescriptor dynamicDescriptor = new DynamicDescriptor(deviceInfo, "getVoltage", schemaKey);
+            recordId = dynamicDescriptor.recordId + instance;
         }
 
         /// Get the voltage from the original and record the result.
@@ -1681,18 +1683,18 @@ class Capture {
         assertChunk();
     }
 
-    /// Save all of the record descriptors into chunks.
-    void serializeRecordDescriptors() {
+    /// Save all of the dynamic record descriptors into chunks.
+    void serializeDynamicDescriptors() {
         // The first bytes of the section are for the signature and count of records:
         if ((chunkRemaining -= 6) < 0)
             nextChunk();
-        chunk.putInt(Signature.RECORD_DESCRIPTORS);
-        chunk.putShort((short) nextRecordId);
+        chunk.putInt(Signature.DYNAMIC_DESCRIPTORS);
+        chunk.putShort((short) nextDynamicId);
         assertChunk();
 
         // Now serialize every record:
-        int expectedRecordId = RecordId.FIRST_ALLOCATABLE;
-        for (RecordDescriptor descriptor: allocatedDescriptors) {
+        int expectedRecordId = RecordId.FIRST_DYNAMIC;
+        for (DynamicDescriptor descriptor: allocatedDescriptors) {
             assert(descriptor.recordId == expectedRecordId);
             expectedRecordId += descriptor.maxInstances;
 
@@ -1746,19 +1748,43 @@ class Capture {
         }
     }
 
-    /// Save the Logcat output into chunks.
+    /// Save the Logcat output into chunks. This is different from [FileWorker#saveOnlySystemLogcat]
+    /// in that it does a time-scoped query to logcat instead of copying the entire system log
+    /// files, and it can get microsecond precision.
+    @SuppressWarnings("StatementWithEmptyBody")
     void serializeLogcat() {
-        File logcatFile = new File(logcatFilename);
-        if (!logcatFile.exists()) {
+        StringBuilder cmd = new StringBuilder();
+        cmd.append("logcat ");
+        cmd.append("-v usec ");
+        cmd.append("UsbRequestJNI:S UsbRequest:S art:W ThreadPool:W System:W ");
+        cmd.append("-f ").append(TEMP_LOGCAT_FILE).append(" ");
+        cmd.append("-d "); // Dump and exit
+
+        if (lastLogcatTime != null) {
+            cmd.append("-t ").append(lastLogcatTime).append(" ");
+        }
+        lastLogcatTime = new SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US)
+                .format(new Date());
+        try {
+            // Run the command, drain streams to avoid blocking, and wait for completion:
+            Process p = Runtime.getRuntime().exec(cmd.toString());
+            try (InputStream is = p.getInputStream()) { while (is.read() != -1); }
+            try (InputStream es = p.getErrorStream()) { while (es.read() != -1); }
+            p.waitFor();
+        } catch (IOException | InterruptedException ignored) {}
+
+        // Now serialize the resulting text file:
+        File tempLogcatFile = new File(TEMP_LOGCAT_FILE);
+        if (!tempLogcatFile.exists()) {
             error(MinorError.LOGCAT);
         } else {
             if ((chunkRemaining -= 8) < 0)
                 nextChunk();
             chunk.putInt(Signature.LOGCAT);
-            chunk.putInt((int) logcatFile.length());
+            chunk.putInt((int) tempLogcatFile.length());
             assertChunk();
             try {
-                try (FileInputStream inStream = new FileInputStream(logcatFile);
+                try (FileInputStream inStream = new FileInputStream(tempLogcatFile);
                      FileChannel in = inStream.getChannel()) {
                     while (in.read(chunk) >= 0) {
                         nextChunk();
@@ -1769,7 +1795,7 @@ class Capture {
                 error(MajorError.FILE_READ_ERROR);
             }
             chunkRemaining = chunk.remaining(); // Adjust for data we just added directly
-            logcatFile.delete();
+            tempLogcatFile.delete();
         }
     }
 
@@ -1845,6 +1871,7 @@ class Capture {
         manifest.suppressedIssues = sidekick.suppressedIssues.stream().mapToInt(Integer::intValue).toArray();
         manifest.appBuildTime = sidekick.appBuildTime;
         manifest.isBlocksOpMode = opMode instanceof BlocksOpMode;
+        manifest.isLinearOpMode = opMode instanceof LinearOpMode;
         manifest.availableProcessors = Runtime.getRuntime().availableProcessors();
 
         Class<? extends OpMode> klass = opMode.getClass();
@@ -1977,7 +2004,7 @@ class Capture {
         chunk = sidekick.fileWorker.getChunk();
         chunk.put(Header.create(0, 0, startUnixTime, sections));
         sections[Section.ARCHIVE].offset = getOffset();
-        chunk.putInt(Signature.ARCHIVE_DATA);
+        chunk.putInt(Signature.ARCHIVE_RECORDS);
         chunkRemaining = chunk.remaining();
 
         // Replace hardwareMap with our own implementation:
@@ -1995,24 +2022,6 @@ class Capture {
         // Lynx Module info is used for Bulk Read processing:
         initializeLynxModuleInfo();
 
-        // Decide on the filename for capturing Logcat data and enlighten the emulator:
-        logcatFilename = Sidekick.SUBDIRECTORY + "/" + dateAndTime + ".logcat";
-        if (sidekick.emulatorCallback != null) {
-            sidekick.emulatorCallback.apply(0, logcatFilename);
-        } else {
-            // Start a process that will save Logcat output to a file while the opMode runs:
-            try {
-                logcatProcess = new ProcessBuilder(
-                        "logcat",
-                        "-v", "epoch", // Format with Unix timestamps
-                        "-v", "usec", // Format with microseconds
-                        "-f", logcatFilename, // Save to our file
-                        "*:V" // All tags, full verboseness
-                ).redirectErrorStream(true).start();
-            } catch (IOException e) {
-                error(MinorError.LOGCAT);
-            }
-        }
         Sidekick.logI("INIT was pressed"); // Mark the start of an opMode
     }
 
@@ -2057,14 +2066,8 @@ class Capture {
             // Snapshot the current thread state:
             snapshotThreadsAndJiffies(false);
 
-            // Terminate Logcat logging and then serialize to the Logcat section:
+            // Serialize Logcat to its own section:
             sections[Section.LOGCAT].offset = getOffset();
-            if (logcatProcess != null) {
-                logcatProcess.destroy();
-                try {
-                    logcatProcess.waitFor();
-                } catch (InterruptedException ignored) {}
-            }
             serializeLogcat();
             sections[Section.LOGCAT].size = getOffset() - sections[Section.LOGCAT].offset;
 
@@ -2075,7 +2078,7 @@ class Capture {
             serializeDeviceDescriptors();
             serializeStringTokens();
             serializeSerializers();
-            serializeRecordDescriptors(); // Must come last
+            serializeDynamicDescriptors(); // Must come last
             serializeThreadDescriptors();
             sections[Section.METADATA].size = getOffset() - sections[Section.METADATA].offset;
 
@@ -2210,11 +2213,24 @@ class Capture {
         }
     }
 
-    /// Mark the beginning/end of a loop.
-    void loop(Sk.LoopType loopType) {
+    /// API to record the current pose.
+    void pose(Pose2D pose) {
+        synchronized (sidekickLock) {
+            if (beginRecord(RecordId.POSE, 12)) {
+                // Record inches and radians; the app will convert to the preferred units:
+                chunk.putFloat((float) pose.getX(DistanceUnit.INCH));
+                chunk.putFloat((float) pose.getY(DistanceUnit.INCH));
+                chunk.putFloat((float) pose.getHeading(AngleUnit.RADIANS));
+                assertChunk();
+            }
+        }
+    }
+
+    /// API to mark the beginning/end of a loop.
+    void loop() {
         synchronized (sidekickLock) {
             if (beginRecord(RecordId.LOOP, 1)) {
-                chunk.put((byte) loopType.ordinal());
+                chunk.put((byte) 0); // Reserved
                 assertChunk();
             }
         }
@@ -2234,9 +2250,9 @@ class Capture {
                         return; // ====>
                 }
                 SchemaKey schemaKey = getSchemaKey(args, false, 0);
-                RecordDescriptor descriptor = varargsDescriptors.get(schemaKey);
+                DynamicDescriptor descriptor = varargsDescriptors.get(schemaKey);
                 if (descriptor == null) {
-                    descriptor = new RecordDescriptor(schemaKey, args.length);
+                    descriptor = new DynamicDescriptor(schemaKey, args.length);
                 }
                 if ((chunkRemaining -= (7 + descriptor.recordLength)) < 0) {
                     nextChunk();
@@ -2254,14 +2270,47 @@ class Capture {
         }
     }
 
+    /// API to create a stopwatch object; returns the internal identifier.
+    int createStopwatch(@NonNull String name) {
+        synchronized (sidekickLock) {
+            int identifier = nextStopwatchId++;
+            if (beginRecord(RecordId.CREATE_STOPWATCH, 2)) {
+                chunk.putShort((short) identifier);
+                putString(name);
+                assertChunk();
+            }
+            return identifier;
+        }
+    }
+
+    /// API to start a stopwatch.
+    void startStopwatch(int id) {
+        synchronized (sidekickLock) {
+            if (beginRecord(RecordId.STOPWATCH_START, 2)) {
+                chunk.putShort((short) id);
+                assertChunk();
+            }
+        }
+    }
+
+    /// API to stop a stopwatch.
+    void stopStopwatch(int id) {
+        synchronized (sidekickLock) {
+            if (beginRecord(RecordId.STOPWATCH_STOP, 2)) {
+                chunk.putShort((short) id);
+                assertChunk();
+            }
+        }
+    }
+
     /// Helper for recording [Sk#alert] and [Sk#require] varargs records. These are not
     /// as performance critical as [Sk#note] so they employ a common helper function.
     void recordVarargs(int varargsType, String format, Object... args) {
         synchronized(sidekickLock) {
             SchemaKey schemaKey = getSchemaKey(args, false, 0);
-            RecordDescriptor descriptor = varargsDescriptors.get(schemaKey);
+            DynamicDescriptor descriptor = varargsDescriptors.get(schemaKey);
             if (descriptor == null) {
-                descriptor = new RecordDescriptor(schemaKey, args.length);
+                descriptor = new DynamicDescriptor(schemaKey, args.length);
             }
             if (beginRecord(descriptor.recordId + varargsType,
                     descriptor.recordLength + 2)) {
@@ -2302,9 +2351,9 @@ class Capture {
             synchronized (sidekickLock) {
                 SkItem wrappedItem = new SkItem(originalItem, lineId); // Must be under lock
                 SchemaKey schemaKey = getSchemaKey(args, false, 0);
-                RecordDescriptor descriptor = varargsDescriptors.get(schemaKey);
+                DynamicDescriptor descriptor = varargsDescriptors.get(schemaKey);
                 if (descriptor == null) {
-                    descriptor = new RecordDescriptor(schemaKey, args.length);
+                    descriptor = new DynamicDescriptor(schemaKey, args.length);
                 }
                 byte flags = 0;
                 int payload = 6; // byte + short + int24
@@ -2342,9 +2391,9 @@ class Capture {
         SkItem telemetrySetValue(int flags, SkItem wrappedItem, String format, Object... args) {
             synchronized (sidekickLock) {
                 SchemaKey schemaKey = getSchemaKey(args, false, 0);
-                RecordDescriptor descriptor = varargsDescriptors.get(schemaKey);
+                DynamicDescriptor descriptor = varargsDescriptors.get(schemaKey);
                 if (descriptor == null) {
-                    descriptor = new RecordDescriptor(schemaKey, args.length);
+                    descriptor = new DynamicDescriptor(schemaKey, args.length);
                 }
 
                 int payload = 4; // byte + int24
@@ -2569,9 +2618,9 @@ class Capture {
                 originalLog.add(format, args);
                 synchronized (sidekickLock) {
                     SchemaKey schemaKey = getSchemaKey(args, false, 0);
-                    RecordDescriptor descriptor = varargsDescriptors.get(schemaKey);
+                    DynamicDescriptor descriptor = varargsDescriptors.get(schemaKey);
                     if (descriptor == null) {
-                        descriptor = new RecordDescriptor(schemaKey, args.length);
+                        descriptor = new DynamicDescriptor(schemaKey, args.length);
                     }
 
                     if (beginRecord(descriptor.recordId + VarargsType.LOG_ADD,
@@ -2695,7 +2744,7 @@ class Capture {
             synchronized (sidekickLock) {
                 if (beginRecord(RecordId.TELEMETRY_ADD_LINE, 3)) {
                     putInt24(wrappedLine.identifier);
-                    putString(lineCaption, 16*1024); // Allow really big strings
+                    putString(lineCaption, MAX_STRING_BYTES); // Allow really big strings
                     assertChunk();
                 }
             }

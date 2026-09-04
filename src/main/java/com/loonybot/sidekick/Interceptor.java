@@ -95,7 +95,7 @@ public class Interceptor {
             @AllArguments Object[] args,
             @FieldValue(ProxyBuilder.CONTEXT_FIELD) Context context
     ) throws Exception {
-        Capture.RecordDescriptor descriptor;
+        Capture.DynamicDescriptor descriptor;
 
         // Call the original method on the original object. We can't use @SuperCall because
         // the proxy instance has uninitialized fields due to Objenesis:
@@ -117,7 +117,7 @@ public class Interceptor {
             MethodKey methodKey = new MethodKey(method);
             descriptor = capture.methodDescriptors.get(methodKey);
             if (descriptor == null) {
-                descriptor = capture.new RecordDescriptor(context, methodKey);
+                descriptor = capture.new DynamicDescriptor(context, methodKey);
             }
 
             // Now record the method call:

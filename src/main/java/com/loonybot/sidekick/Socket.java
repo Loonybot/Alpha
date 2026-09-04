@@ -13,6 +13,7 @@ import com.qualcomm.robotcore.eventloop.opmode.OpModeManagerImpl;
 import java.io.File;
 import java.io.FilenameFilter;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -477,12 +478,16 @@ class Socket extends NanoWSD.WebSocket {
     }
 
     /// Restart the ADB daemon.
+    @SuppressWarnings("StatementWithEmptyBody")
     void handleResetAdb(JsonObject request) {
         // The WebSocket is independent of ADB and stays up throughout.
         JsonObject resetAdbResponse = createResponse(request);
         try {
-            Runtime.getRuntime().exec("setprop ctl.restart adbd");
-        } catch (IOException ignored) {}
+            Process p = Runtime.getRuntime().exec("setprop ctl.restart adbd");
+            try (InputStream is = p.getInputStream()) { while (is.read() != -1); }
+            try (InputStream es = p.getErrorStream()) { while (es.read() != -1); }
+            p.waitFor();
+        } catch (IOException|InterruptedException ignored) {}
         sendJson(resetAdbResponse);
     }
 
@@ -490,13 +495,17 @@ class Socket extends NanoWSD.WebSocket {
     void handleQueryRealtimeCounters(JsonObject request) {
         JsonObject response = createResponse(request);
 
-        // Return an array of string pairs (name and description) for all available realtime counters:
+        // Return an array of descriptors for each available realtime counters:
         LinkedList<RealtimeDescriptor> descriptors = Realtime.getSupportedCounters();
         JsonArray counters = new JsonArray();
         for (RealtimeDescriptor descriptor: descriptors) {
             JsonObject counter = new JsonObject();
-            counter.addProperty("name", descriptor.name);
+            counter.addProperty("id", descriptor.id);
             counter.addProperty("description", descriptor.description);
+            counter.addProperty("unit", descriptor.unit);
+            counter.addProperty("is_integer", descriptor.isInteger);
+            counter.addProperty("min", descriptor.recommended_min);
+            counter.addProperty("max", descriptor.recommended_max);
             counters.add(counter);
         }
         response.add("counters", counters);
@@ -507,11 +516,11 @@ class Socket extends NanoWSD.WebSocket {
     /// Subscribe to the requested realtime counters; unsubscribe if the list is empty.
     void handleSubscribeRealtime(JsonObject request) {
         JsonObject response = createResponse(request);
-        String[] names = request.has("names")
-                ? Sidekick.gson.fromJson(request.get("names"), String[].class)
+        String[] ids = request.has("ids")
+                ? Sidekick.gson.fromJson(request.get("ids"), String[].class)
                 : new String[0];
 
-        Realtime.updateSubscription(this, names);
+        Realtime.updateSubscription(this, ids);
         sendJson(response);
     }
 
@@ -527,7 +536,7 @@ class Socket extends NanoWSD.WebSocket {
                     values.add(value);
                 }
                 JsonObject counter = new JsonObject();
-                counter.addProperty("name", subscribedCounter);
+                counter.addProperty("id", subscribedCounter);
                 counter.add("values", values);
                 counters.add(counter);
             }

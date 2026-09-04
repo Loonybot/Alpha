@@ -3,6 +3,7 @@
 /// Copyright Andrew Goossen.
 package com.loonybot.sidekick;
 
+import static com.loonybot.sidekick.Sidekick.SD_CARD_PATH;
 import static com.loonybot.sidekick.Sidekick.SUBDIRECTORY;
 import static java.lang.System.nanoTime;
 
@@ -36,6 +37,9 @@ import java.util.concurrent.TimeUnit;
 /// code can be tested on the PC.
 @SuppressWarnings("NonAtomicOperationOnVolatileField")
 class FileWorker {
+    /// While actively writing the capture file, we use this extension:
+    static final String WORKING_EXTENSION = ".temporary";
+
     /// The main Sidekick thread communicates to our thread with the following message template.
     static abstract class Message {}
 
@@ -86,7 +90,7 @@ class FileWorker {
 
     static final double MIN_MATCH_TELOP_DURATION = 115; // Min run seconds to be considered a match TeleOp
     static final double MATCH_TIME_EPSILON = 2; // Fudge for considering interval between OpModes, seconds
-    static final int CHUNK_SIZE = 500; // @@@ // Size of our working ByteBuffers, in bytes TODO: fix
+    static final int CHUNK_SIZE = 64*1024; // Size of our working ByteBuffers, in bytes
     static final int PRE_ALLOCATED_CHUNK_COUNT = 4; // Number of pre-allocated chunk ByteBuffers
     static final int MAX_CAPTURE_SIZE = 100*1024*1024; // Stop capturing at 100 MB
 
@@ -159,7 +163,7 @@ class FileWorker {
 
         // Give the capture a temporary name until the capture is complete, of the form of
         // "2024-11-25 [17.37pm] Sidekick.temporary":
-        String path = SUBDIRECTORY + "/" + dateAndTime + ".temporary";
+        String path = SUBDIRECTORY + "/" + dateAndTime + WORKING_EXTENSION;
         file = new File(path);
         stream = new FileOutputStream(file);
         channel = stream.getChannel();
@@ -207,7 +211,7 @@ class FileWorker {
         // add ny file I/O errors to the message:
         message.majorErrors |= (fileError) ? (1 << MajorError.FILE_WRITE_ERROR.ordinal()) : 0;
         ByteBuffer headerBuffer = Header.create(message.majorErrors, message.minorErrors,
-                message.startUnixTime, message.sections);
+            message.startUnixTime, message.sections);
         do {
             channel.write(headerBuffer, 0);
         } while (headerBuffer.hasRemaining());
@@ -265,6 +269,14 @@ class FileWorker {
             } catch (InterruptedException ignored) {
                 Thread.currentThread().interrupt();
             }
+        }
+
+        // Override the file name with the user's preferred name, if any. NOTE: Companion
+        // files are not renamed, so data may be lost. For test purposes only.
+        if (!Sidekick.instance.captureName.isEmpty()) {
+            fileName = Sidekick.instance.captureName;
+            Sidekick.instance.captureName = "";
+            new File(SUBDIRECTORY, fileName).delete(); // Delete any old capture of this name
         }
 
         // Our final step is to rename the temporary capture to its final name. Once this happens,
@@ -410,13 +422,95 @@ class FileWorker {
         return bytesQueued > MAX_CAPTURE_SIZE;
     }
 
+    /// Copy the most recent Logcat data to a temporary file. This will be up to 8 MB in size
+    /// because the FTC code rotates the log every 4 MB and we save the currently active log file
+    /// as well as the previous one.
+    static boolean snapshotSystemLogcat(File outputTemp) {
+        File active = new File(SD_CARD_PATH + "/robotControllerLog.txt");
+        File rotated = new File(SD_CARD_PATH + "/robotControllerLog.txt.1");
+        if (!active.exists() && !rotated.exists()) {
+            return false; // ====>
+        }
+        try {
+            try (FileOutputStream out = new FileOutputStream(outputTemp);
+                 FileChannel outChannel = out.getChannel()) {
+
+                // 1. Copy the most recently rotated file first:
+                if (rotated.exists()) {
+                    try (FileInputStream in = new FileInputStream(rotated);
+                         FileChannel inChannel = in.getChannel()) {
+                        outChannel.transferFrom(inChannel, outChannel.size(), inChannel.size());
+                    }
+                }
+
+                // 2. Append the active file:
+                if (active.exists()) {
+                    try (FileInputStream in = new FileInputStream(active);
+                         FileChannel inChannel = in.getChannel()) {
+                        outChannel.transferFrom(inChannel, outChannel.size(), inChannel.size());
+                    }
+                }
+            }
+            return true;
+        } catch (IOException ignored) {
+            return false;
+        }
+    }
+
+    /// Create a capture file that contains only Logcat data from the system's log. This is a
+    /// different implementation than [Capture#serializeLogcat] because we can't query the log
+    /// about the previous boot - we have to copy from the system log files instead.
+    static void saveOnlySystemLogcat(String captureFileName) {
+        Section[] sections = new Section[Section.COUNT];
+        for (int i = 0; i < Section.COUNT; i++) {
+            sections[i] = new Section(0, 0);
+        }
+
+        File temporaryLogcatFile = new File(Sidekick.TEMP_LOGCAT_FILE);
+        if (!snapshotSystemLogcat(temporaryLogcatFile)) {
+            Sidekick.logE("Couldn't save Logcat");
+            return; // ====>
+        }
+
+        // Initialize the subsection header:
+        int logcatFileLength = (int) temporaryLogcatFile.length();
+        ByteBuffer subsectionHeader = ByteBuffer.allocate(8);
+        subsectionHeader.putInt(Signature.LOGCAT); // Logcat subsection within the archive section
+        subsectionHeader.putInt(logcatFileLength);
+        subsectionHeader.flip();
+
+        // Create the capture header contents with the LOGCAT subsection header positioned
+        // immediately following the capture header:
+        int headerSize = Header.SIZE;
+        sections[Section.LOGCAT] = new Section(headerSize, subsectionHeader.limit() + logcatFileLength);
+        ByteBuffer captureHeader = Header.create(
+                1 << MajorError.INTERRUPTED_CAPTURE.ordinal(), 0, 0, sections);
+
+        File captureFile = new File(Sidekick.SUBDIRECTORY, captureFileName);
+        try {
+            try (FileOutputStream outStream = new FileOutputStream(captureFile);
+                 FileInputStream inStream = new FileInputStream(temporaryLogcatFile);
+                 FileChannel outChannel = outStream.getChannel();
+                 FileChannel in = inStream.getChannel()) {
+
+                outChannel.write(captureHeader);
+                outChannel.write(subsectionHeader);
+                in.transferTo(0, logcatFileLength, outChannel); // Append the Logcat file
+                FileWorker.syncBeforeClose(outStream); // Flush to storage part 1
+            }
+            FileWorker.syncAfterClose(captureFile); // Flush to storage part 2
+        } catch (IOException ignored) {
+            Sidekick.logE("Couldn't save Logcat #2");
+        }
+        temporaryLogcatFile.delete();
+    }
+
     /// This function is called at boot time to clean up any leftover files from a capture
     /// that was previously in progress but which got interrupted. Such interruptions can be
     /// from power cycling the robot before STOP is pressed, or spontaneous reboots. In such
     /// cases, the Sidekick capture data can't be recovered as too much data was held in memory
     /// and thereby lost. However, Logcat data is still available, although it might not be
     /// fully complete if the file system did not have had time to save the latest data.
-    // @@@ Respect retentionDays period!
     static void cleanupCaptureSubdirectory() {
         // Create the Sidekick subdirectory if necessary:
         File subdirectory = new File(Sidekick.SUBDIRECTORY);
@@ -426,71 +520,36 @@ class FileWorker {
             }
         }
 
-        // Get the newest file in the Persist.SUBDIRECTORY directory, if any, that ends in ".logcat":
-        File logcatFile = null;
+        // Get the newest unfinished capture file in Sidekick's subdirectory, if any:
+        File newestIncompleteFile = null;
         File[] fileList = new File(Sidekick.SUBDIRECTORY).listFiles();
         if (fileList != null) {
             for (File file: fileList) {
-                if (file.getName().endsWith(".logcat")) {
-                    if (logcatFile == null) {
-                        logcatFile = file;
-                    } else if (file.lastModified() > logcatFile.lastModified()) {
-                        logcatFile = file;
+                if (file.getName().endsWith(WORKING_EXTENSION)) {
+                    if (newestIncompleteFile == null) {
+                        newestIncompleteFile = file;
+                    } else if (file.lastModified() > newestIncompleteFile.lastModified()) {
+                        newestIncompleteFile = file;
                     }
                 }
             }
 
-            // Create a tiny capture file that contains only a LOGCAT section, and within
-            // that only a LOGCAT subsection:
-            if ((logcatFile != null) && (logcatFile.exists()) && (logcatFile.isFile())) {
+            // If we found an unfinished capture file, then create a new complete capture file that
+            // contains only a LOGCAT section, and within that only a LOGCAT subsection:
+            if ((newestIncompleteFile != null) && (newestIncompleteFile.exists()) && (newestIncompleteFile.isFile())) {
                 // Before creating a new capture, delete any old epoch ones:
                 deleteEpochCaptures();
 
-                Section[] sections = new Section[Section.COUNT];
-                for (int i = 0; i < Section.COUNT; i++) {
-                    sections[i] = new Section(0, 0);
-                }
-
-                // Initialize the subsection header:
-                int logcatFileLength = (int) logcatFile.length();
-                ByteBuffer subsectionHeader = ByteBuffer.allocate(8);
-                subsectionHeader.putInt(Signature.LOGCAT); // Logcat subsection within the archive section
-                subsectionHeader.putInt(logcatFileLength);
-                subsectionHeader.flip();
-
-                // Create the capture header contents with the LOGCAT subsection header positioned
-                // immediately following the capture header:
-                int headerSize = Header.SIZE;
-                sections[Section.LOGCAT] = new Section(headerSize, subsectionHeader.limit() + logcatFileLength);
-                ByteBuffer captureHeader = Header.create(
-                    1 << MajorError.INTERRUPTED_CAPTURE.ordinal(), 0, 0, sections);
-
                 // For the capture file, use the same name as 'logcatFile' but with the extension
-                // ".sidekick" instead of ".temporary":
-                String captureFileName = logcatFile.getName().replaceAll(
-                        "\\.logcat$", " Incomplete.sidekick");
-                File captureFile = new File(Sidekick.SUBDIRECTORY, captureFileName);
-                try {
-                    try (FileOutputStream outStream = new FileOutputStream(captureFile);
-                         FileInputStream inStream = new FileInputStream(logcatFile);
-                         FileChannel outChannel = outStream.getChannel();
-                         FileChannel in = inStream.getChannel()) {
-
-                        outChannel.write(captureHeader);
-                        outChannel.write(subsectionHeader);
-                        in.transferTo(0, logcatFileLength, outChannel); // Append the Logcat file
-                        FileWorker.syncBeforeClose(outStream); // Flush to storage part 1
-                    }
-                    FileWorker.syncAfterClose(captureFile); // Flush to storage part 2
-                } catch (IOException ignored) {
-                    Sidekick.logE("Couldn't save Logcat");
-                }
+                // " Incomplete.sidekick" as the end instead of ".temporary":
+                String captureFileName = newestIncompleteFile.getName().replaceAll(
+                        "\\" + WORKING_EXTENSION + "$", " Incomplete.sidekick");
+                saveOnlySystemLogcat(captureFileName);
             }
 
-            // Now delete all of the files in the Sidekick subdirectory that end in ".temporary"
-            // and ".logcat":
+            // Now delete all of the files in the Sidekick subdirectory that end in ".temporary":
             for (File file: fileList) {
-                if (file.getName().endsWith(".temporary") || file.getName().endsWith(".logcat")) {
+                if (file.getName().endsWith(WORKING_EXTENSION)) {
                     file.delete();
                 }
             }
