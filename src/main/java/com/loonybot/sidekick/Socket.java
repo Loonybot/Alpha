@@ -452,15 +452,15 @@ class Socket extends NanoWSD.WebSocket {
         return true; // Success!
     }
 
-    /// Restore a configuration file, so long as the name isn't already taken.
-    void handleRestoreConfiguration(JsonObject request) {
+    /// Save a configuration file, so long as the name isn't already taken.
+    void handleSaveConfiguration(JsonObject request) {
         JsonObject response = createResponse(request);
         String configName = payloadGet(request, "filename", "");
         String contents = payloadGet(request, "contents", "");
 
         File configFile = new File(Sidekick.SD_CARD_PATH + "/FIRST/" + configName + ".xml");
         if (configFile.exists()) {
-            response.addProperty("error", "File already exists");
+            response.addProperty("error", "Name already exists");
             sendJson(response);
             return; // ===>
         }
@@ -471,9 +471,8 @@ class Socket extends NanoWSD.WebSocket {
                 randomAccessFile.write(contents.getBytes(StandardCharsets.UTF_8));
             }
         } catch (IOException e) {
-            response.addProperty("error", "Failed to write file: " + e.getMessage());
+            response.addProperty("error", "Couldn't write file: " + e.getMessage());
         }
-
         sendJson(response);
     }
 
@@ -641,8 +640,8 @@ class Socket extends NanoWSD.WebSocket {
                 case "download_supplements":
                     handleDownloadSupplements(payload);
                     break;
-                case "restore_configuration":
-                    handleRestoreConfiguration(payload);
+                case "save_configuration":
+                    handleSaveConfiguration(payload);
                     break;
                 case "reset_adb":
                     handleResetAdb(payload);

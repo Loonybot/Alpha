@@ -71,12 +71,11 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: "Sidekick RC library v${{ env.VERSION }}"
-          body: >-
-            Add the following line to the **dependencies** section in your team code's **build.gradle**. 
-            (That section should already have a line that says "project(':FtcRobotController')".)   
+          body: |
+            Find your team code's **build.gradle** file. Beware that there may be multiple **build.gradle** files in your project - you want the one with a line that says "project(':FtcRobotController')". Add the following line to the **dependencies** section:
 
             ```
-            implementation 'com.github.Loonybot:SidekickRC:lib-v${{ env.VERSION }}'
+                implementation 'com.github.Loonybot:SidekickRC:lib-v${{ env.VERSION }}'
             ```
             
             In that same file, if you don't already have JitPack in a **repositories** section, you'll need to add it:
@@ -87,8 +86,7 @@ jobs:
             }
             ```
             
-            Don't forget to sync your project with the updated Gradle file by pressing the Elephant 
-            icon in the top-right corner.  
+            Don't forget to sync your project with the updated Gradle file by pressing the Elephant icon in the top-right corner.  
   
             You can usually ignore the assets below.
           files: |

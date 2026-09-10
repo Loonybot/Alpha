@@ -127,7 +127,7 @@ public class Sidekick implements OpModeManagerNotifier.Notifications {
     final static int WEB_SOCKET_PORT = 9090; // Port for the Sidekick web listener
     final static String TAG = "Sidekick"; // Identifier for Logcat error logging
     final static long MIN_STORAGE_MBS = 100; // Always keep this many megabytes free in "/sdcard"
-    final static String SD_CARD_PATH = Environment.getExternalStorageDirectory().getPath(); // AKA 'sdcard'
+    final static String SD_CARD_PATH = Environment.getExternalStorageDirectory().getPath(); // AKA '/sdcard' sans trailing slash
     final static String SUBDIRECTORY = SD_CARD_PATH + "/sidekick"; // Subdirectory for all captures
     final static String TEMP_LOGCAT_FILE = SUBDIRECTORY + "/logcat.temporary";
     final static boolean isPC = !"The Android Project".equals(System.getProperty("java.vm.name"))
