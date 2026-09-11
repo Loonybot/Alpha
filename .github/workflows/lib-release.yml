@@ -72,13 +72,19 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: "Sidekick RC library v${{ env.VERSION }}"
           body: |
-            Find your team code's **build.gradle** file. Beware that there may be multiple **build.gradle** files in your project - you want the one with a line that says "project(':FtcRobotController')". Add the following line to the **dependencies** section:
+            Find your TeamCode **build.gradle** file. Beware that there may be multiple **build.gradle** files in your project--you want the one with a line that says `project(':FtcRobotController')`. Add the following line to the **dependencies** section:
 
             ```
-                implementation 'com.github.Loonybot:SidekickRC:lib-v${{ env.VERSION }}'
+            implementation 'com.github.Loonybot:SidekickRC:lib-v${{ env.VERSION }}'
             ```
             
-            In that same file, if you don't already have JitPack in a **repositories** section, you'll need to add it:
+            In that same file, if you already have a **repositories** section but it doesn't include JitPack, add the following line inside that section:
+
+            ```
+            maven { url 'https://jitpack.io' }
+            ```
+            
+            If you don't have a **repositories** section at all, you'll need to add it. Make sure it's on its own and not nested inside another section:
             
             ```
             repositories {
